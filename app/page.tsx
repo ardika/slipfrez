@@ -12,11 +12,73 @@ interface SlipUpload {
   processing?: boolean;
 }
 
+interface ManualEmployee {
+  nama: string;
+  hariKerja: string;
+  jamLembur: string;
+}
+
+function formatPeriodeLabel(startISO: string, endISO: string): string {
+  const monShort = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  const fmt = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return `${d} ${monShort[m - 1]} ${y}`;
+  };
+  return `${fmt(startISO)} - ${fmt(endISO)}`;
+}
+
+function buildManualAbsensiData(
+  startISO: string,
+  endISO: string,
+  rows: ManualEmployee[],
+): AbsensiData {
+  const start = new Date(startISO + "T00:00:00Z");
+  const end = new Date(endISO + "T00:00:00Z");
+  const nDays = Math.round((+end - +start) / 86_400_000) + 1;
+
+  const employees: EmployeeCalc[] = rows
+    .filter((r) => r.nama.trim() !== "")
+    .map((r, idx) => {
+      const hk = parseFloat(r.hariKerja) || 0;
+      const lb = parseFloat(r.jamLembur) || 0;
+      const threshold = hk * 8;
+      return {
+        id: `m${idx + 1}`,
+        nama: r.nama.trim(),
+        dept: "",
+        hariKerja: hk,
+        totalJamAktual: +(threshold + lb).toFixed(2),
+        threshold,
+        jamKerja: threshold,
+        jamLembur: +lb.toFixed(2),
+        daysDetail: [],
+      };
+    });
+
+  return {
+    periodeLabel: formatPeriodeLabel(startISO, endISO),
+    startDate: startISO,
+    endDate: endISO,
+    nDays,
+    holidays: [],
+    employees,
+  };
+}
+
 export default function Home() {
+  const [mode, setMode] = useState<"xls" | "manual">("xls");
   const [absensiData, setAbsensiData] = useState<AbsensiData | null>(null);
   const [absensiError, setAbsensiError] = useState<string | null>(null);
   const [absensiLoading, setAbsensiLoading] = useState(false);
   const [slipUploads, setSlipUploads] = useState<Record<string, SlipUpload>>({});
+
+  // Manual input state
+  const [manualStart, setManualStart] = useState("");
+  const [manualEnd, setManualEnd] = useState("");
+  const [manualRows, setManualRows] = useState<ManualEmployee[]>([
+    { nama: "", hariKerja: "", jamLembur: "0" },
+  ]);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   async function handleAbsensiUpload(file: File) {
     setAbsensiError(null);
@@ -32,6 +94,34 @@ export default function Home() {
     } finally {
       setAbsensiLoading(false);
     }
+  }
+
+  function handleManualSubmit() {
+    setManualError(null);
+    if (!manualStart || !manualEnd) {
+      setManualError("Periode mulai dan akhir wajib diisi.");
+      return;
+    }
+    if (manualStart > manualEnd) {
+      setManualError("Tanggal mulai harus sebelum tanggal akhir.");
+      return;
+    }
+    const validRows = manualRows.filter((r) => r.nama.trim() !== "");
+    if (validRows.length === 0) {
+      setManualError("Tambahkan minimal satu karyawan.");
+      return;
+    }
+    for (const r of validRows) {
+      if (!r.hariKerja || parseFloat(r.hariKerja) <= 0) {
+        setManualError(`Hari Kerja untuk "${r.nama}" wajib diisi (> 0).`);
+        return;
+      }
+    }
+    const data = buildManualAbsensiData(manualStart, manualEnd, validRows);
+    setAbsensiData(data);
+    const init: Record<string, SlipUpload> = {};
+    for (const e of data.employees) init[e.id] = { file: null };
+    setSlipUploads(init);
   }
 
   async function handleSlipUpload(emp: EmployeeCalc, file: File) {
@@ -60,6 +150,19 @@ export default function Home() {
     setAbsensiData(null);
     setAbsensiError(null);
     setSlipUploads({});
+    setManualError(null);
+  }
+
+  function addRow() {
+    setManualRows((rs) => [...rs, { nama: "", hariKerja: "", jamLembur: "0" }]);
+  }
+
+  function removeRow(idx: number) {
+    setManualRows((rs) => rs.filter((_, i) => i !== idx));
+  }
+
+  function updateRow(idx: number, patch: Partial<ManualEmployee>) {
+    setManualRows((rs) => rs.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   }
 
   const employeesWithAttendance = absensiData?.employees.filter((e) => e.hariKerja > 0) ?? [];
@@ -71,9 +174,8 @@ export default function Home() {
         <header className="mb-8">
           <h1 className="text-3xl font-semibold tracking-tight">Slip Gaji FREZ</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Upload laporan absensi (.xls), aplikasi akan menghitung hari kerja, jam kerja, dan
-            jam lembur, lalu memodifikasi slip gaji bulan sebelumnya untuk tiap karyawan
-            terdeteksi.
+            Hitung hari kerja, jam kerja, jam lembur — dari laporan absensi (.xls) atau input
+            manual — lalu modifikasi slip gaji bulan sebelumnya untuk tiap karyawan.
           </p>
         </header>
 
@@ -83,26 +185,157 @@ export default function Home() {
             <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">
               1
             </span>
-            Upload Laporan Absensi (.xls)
+            Input Data Absensi
           </h2>
 
           {!absensiData && (
-            <label className="block">
-              <input
-                type="file"
-                accept=".xls,.xlsx,application/vnd.ms-excel"
-                disabled={absensiLoading}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleAbsensiUpload(f);
-                }}
-                className="block w-full text-sm file:mr-4 file:rounded-md file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800 file:cursor-pointer"
-              />
-              {absensiLoading && <p className="mt-2 text-sm text-slate-500">Memproses…</p>}
-              {absensiError && (
-                <p className="mt-2 text-sm text-red-600">Error: {absensiError}</p>
+            <>
+              {/* Mode toggle */}
+              <div className="mb-4 inline-flex rounded-md border border-slate-300 bg-slate-100 p-1 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setMode("xls")}
+                  className={`rounded px-3 py-1.5 font-medium transition ${
+                    mode === "xls" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Upload XLS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("manual")}
+                  className={`rounded px-3 py-1.5 font-medium transition ${
+                    mode === "manual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Input Manual
+                </button>
+              </div>
+
+              {mode === "xls" && (
+                <label className="block">
+                  <input
+                    type="file"
+                    accept=".xls,.xlsx,application/vnd.ms-excel"
+                    disabled={absensiLoading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleAbsensiUpload(f);
+                    }}
+                    className="block w-full text-sm file:mr-4 file:rounded-md file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800 file:cursor-pointer"
+                  />
+                  {absensiLoading && <p className="mt-2 text-sm text-slate-500">Memproses…</p>}
+                  {absensiError && (
+                    <p className="mt-2 text-sm text-red-600">Error: {absensiError}</p>
+                  )}
+                </label>
               )}
-            </label>
+
+              {mode === "manual" && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="block text-sm">
+                      <span className="mb-1 block font-medium text-slate-700">Periode Mulai</span>
+                      <input
+                        type="date"
+                        value={manualStart}
+                        onChange={(e) => setManualStart(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      <span className="mb-1 block font-medium text-slate-700">Periode Akhir</span>
+                      <input
+                        type="date"
+                        value={manualEnd}
+                        onChange={(e) => setManualEnd(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
+                      />
+                    </label>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-slate-700">Karyawan</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                            <th className="px-2 py-1.5">Nama</th>
+                            <th className="px-2 py-1.5 w-32">Hari Kerja</th>
+                            <th className="px-2 py-1.5 w-32">Jam Lembur</th>
+                            <th className="w-8"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {manualRows.map((row, idx) => (
+                            <tr key={idx}>
+                              <td className="px-2 py-1">
+                                <input
+                                  type="text"
+                                  value={row.nama}
+                                  onChange={(e) => updateRow(idx, { nama: e.target.value })}
+                                  placeholder="contoh: MAULANA"
+                                  className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-900 focus:outline-none"
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={row.hariKerja}
+                                  onChange={(e) => updateRow(idx, { hariKerja: e.target.value })}
+                                  className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-900 focus:outline-none"
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={row.jamLembur}
+                                  onChange={(e) => updateRow(idx, { jamLembur: e.target.value })}
+                                  className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-900 focus:outline-none"
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                {manualRows.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeRow(idx)}
+                                    aria-label="Hapus baris"
+                                    className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addRow}
+                      className="mt-2 rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-slate-900 hover:text-slate-900"
+                    >
+                      + Tambah Karyawan
+                    </button>
+                  </div>
+
+                  {manualError && <p className="text-sm text-red-600">{manualError}</p>}
+
+                  <button
+                    type="button"
+                    onClick={handleManualSubmit}
+                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                  >
+                    Lanjut ke Upload Slip →
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
           {absensiData && (
@@ -202,7 +435,7 @@ export default function Home() {
                   <div key={emp.id} className="rounded-md border border-slate-200 p-4">
                     <div className="mb-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                       <span className="text-base font-medium">{emp.nama}</span>
-                      <span className="text-xs text-slate-500">ID {emp.id} · {emp.dept}</span>
+                      {emp.dept && <span className="text-xs text-slate-500">ID {emp.id} · {emp.dept}</span>}
                       <span className="ml-auto text-sm text-slate-700">
                         Hari: <b>{emp.hariKerja}</b> · Jam Kerja: <b>{emp.jamKerja.toFixed(2)}</b> · Lembur: <b className="text-amber-700">{emp.jamLembur.toFixed(2)}</b>
                       </span>
