@@ -423,9 +423,9 @@ export default function Home() {
               Upload Slip Bulan Sebelumnya
             </h2>
             <p className="mb-4 text-sm text-slate-600">
-              Untuk setiap karyawan, upload file slip gaji bulan lalu (.xlsx). Aplikasi akan
-              meng-update Periode, Hari Kehadiran, Jam Lembur (dan Gaji Pokok pro-rata bila
-              menggunakan format <code className="rounded bg-slate-100 px-1">(N/M hr)</code>).
+              Upload file slip bulan lalu (.xlsx atau .pdf) per karyawan. <b>XLSX:</b>
+              modifikasi langsung dengan format terjaga. <b>PDF:</b> parse data lalu generate
+              slip XLSX baru dari template bawaan (format mungkin berbeda dari aslinya).
             </p>
 
             <div className="space-y-4">
@@ -443,7 +443,7 @@ export default function Home() {
 
                     <input
                       type="file"
-                      accept=".xlsx"
+                      accept=".xlsx,.pdf,application/pdf"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) handleSlipUpload(emp, f);

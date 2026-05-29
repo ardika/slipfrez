@@ -1,5 +1,7 @@
 import ExcelJS from "exceljs";
 import { EmployeeCalc } from "./types";
+import { extractPdfSlip } from "./extractPdfSlip";
+import { buildSlipFromTemplate } from "./buildSlipFromTemplate";
 
 export interface SlipUpdateInfo {
   fileName: string;
@@ -18,6 +20,13 @@ export async function modifySlipForEmployee(
   emp: EmployeeCalc,
   periodeLabel: string,
 ): Promise<{ blob: Blob; info: SlipUpdateInfo }> {
+  // Route by file type: PDF -> parse + build from template, XLSX -> modify in place
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith(".pdf") || file.type === "application/pdf") {
+    const extracted = await extractPdfSlip(file);
+    return buildSlipFromTemplate(emp, periodeLabel, extracted);
+  }
+
   const buf = await file.arrayBuffer();
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
